@@ -180,15 +180,20 @@ class SimplePredictor:
             return False, None, None
     
     def verify_prediction(self, message_text):
-        """Vérifie les résultats des prédictions"""
+        """Vérifie les résultats des prédictions avec logging détaillé"""
         try:
             game_number = self.extract_game_number(message_text)
             if not game_number:
                 return None, None
+                
+            logger.info(f"Numéro de jeu du résultat: {game_number}")
             
             # Vérifier si c'est un résultat final (avec ✅ ou 🔰)
             if not re.search(r'[✅🔰]', message_text):
+                logger.info(f"⏳ Message #{game_number} en cours - pas encore final")
                 return None, None
+            else:
+                logger.info(f"✅ Message #{game_number} finalisé avec 🔰 ou ✅")
             
             # Extraire les groupes pour valider le format 2+2
             patterns = [
@@ -212,20 +217,31 @@ class SimplePredictor:
                     break
             
             if not first_group or not second_group:
+                logger.info("❌ Impossible d'extraire les groupes du message")
                 return None, None
+                
+            logger.info(f"Groupes extraits: '{first_group}' et '{second_group}'")
             
-            # Compter les cartes dans chaque groupe
-            cards_first = len(re.findall(r'[♠♥♦♣]', first_group))
-            cards_second = len(re.findall(r'[♠♥♦♣]', second_group))
+            # Compter les cartes dans chaque groupe avec détails
+            emoji_first = len(re.findall(r'[♠♥♦♣]️', first_group))
+            simple_first = len(re.findall(r'[♠♥♦♣](?!️)', first_group))
+            cards_first = emoji_first + simple_first
             
+            emoji_second = len(re.findall(r'[♠♥♦♣]️', second_group))
+            simple_second = len(re.findall(r'[♠♥♦♣](?!️)', second_group))  
+            cards_second = emoji_second + simple_second
+            
+            logger.info(f"Comptage cartes détaillé: emoji={emoji_first}, simple={simple_first}, total={cards_first} dans '{first_group}'")
+            logger.info(f"Comptage cartes détaillé: emoji={emoji_second}, simple={simple_second}, total={cards_second} dans '{second_group}'")
             logger.info(f"Comptage cartes: groupe1={cards_first}, groupe2={cards_second}")
             
             # Valider le format 2+2
-            if cards_first != 2 or cards_second != 2:
+            is_valid_format = (cards_first == 2 and cards_second == 2)
+            logger.info(f"Résultat valide (2+2): {is_valid_format}")
+            
+            if not is_valid_format:
                 logger.info("❌ Résultat invalide: pas exactement 2+2 cartes, ignoré pour vérification")
                 return None, None
-            
-            logger.info("✅ Résultat valide (2+2)")
             
             # Vérifier les prédictions avec offsets 0, 1, 2, 3
             for offset in range(4):
@@ -399,33 +415,36 @@ async def start_command(event):
     except:
         display_status = "⚠️ Accès limité"
     
-    welcome_msg = f"""🎯 **Bot de Prédiction v2024 - ACTIF !**
+    welcome_msg = f"""🎯 **Bot de Prédiction de Cartes - Bienvenue !**
 
-🔹 **Configuration Automatique** - Prêt à fonctionner
-🔹 **Logique As Optimisée** - 1 As premier + 0 As deuxième groupe
-🔹 **Port {PORT}** - Render.com
+🔹 **Développé par Sossou Kouamé Appolinaire**
+
+**Fonctionnalités** :
+• Prédictions automatiques anticipées (déclenchées sur As dans premier groupe)
+• Prédictions pour les prochains jeux
+• Vérification des résultats avec statuts détaillés (✅0️⃣, ✅1️⃣, ✅2️⃣, ✅3️⃣, ❌)
+
+**Configuration** :
+1. Ajoutez-moi dans vos canaux
+2. Je vous enverrai automatiquement une invitation privée
+3. Répondez avec /set_stat [ID] ou /set_display [ID]
 
 **État des Canaux** :
 📊 Canal Stats ({detected_stat_channel}): {stat_status}
 📢 Canal Display ({detected_display_channel}): {display_status}
 
-**Fonctionnement** :
-✅ **Surveillance automatique** du canal stats
-✅ **Prédictions automatiques** selon logique des As  
-✅ **Diffusion automatique** des prédictions
-✅ **Vérification automatique** des résultats
+**Commandes** :
+• `/start` - Ce message
+• `/status` - État du bot (admin)
+• `/intervalle` - Configure le délai de prédiction (admin)
+• `/sta` - Statut des déclencheurs (admin)
+• `/reset` - Réinitialiser (admin)
+• `/deploy` - Pack de déploiement (admin)
 
-**Commandes Disponibles** :
-• `/status` - État détaillé du système
-• `/config` - Voir configuration actuelle
-• `/set_stat [ID]` - Changer canal stats
-• `/set_display [ID]` - Changer canal display
-
-🚀 **Le bot fonctionne automatiquement !**
-Aucune commande requise - surveille et prédit en temps réel."""
+**Le bot est prêt à analyser vos jeux !** 🚀"""
     
     await event.respond(welcome_msg)
-    logger.info(f"Message bienvenue envoyé à {event.sender_id} avec état canaux")
+    logger.info(f"Message de bienvenue envoyé à l'utilisateur {event.sender_id}")
 
 @client.on(events.NewMessage(pattern='/status'))
 async def status_command(event):
@@ -463,6 +482,76 @@ async def status_command(event):
     except Exception as e:
         logger.error(f"Erreur status: {e}")
         await event.respond(f"❌ Erreur: {e}")
+
+@client.on(events.NewMessage(pattern='/sta'))
+async def show_trigger_numbers(event):
+    """Affiche le statut des déclencheurs automatiques (admin uniquement)"""
+    if event.sender_id != ADMIN_ID:
+        return
+        
+    try:
+        # Charger la configuration actuelle
+        load_config()
+        
+        # Calculer les statistiques
+        active_predictions = len([s for s in predictor.prediction_status.values() if s == '⌛'])
+        total_predictions = len(predictor.status_log)
+        
+        msg = f"""📊 **Statut des Déclencheurs Automatiques**
+
+🎯 **Logique de Déclenchement**:
+• Le bot analyse chaque message avec des As
+• Déclenchement UNIQUEMENT si: 1 As dans premier groupe + 0 As dans deuxième groupe
+• Format prédiction: "🔵{{numéro}} 🔵3D: statut :⏳"
+
+📈 **Statistiques actuelles**:
+• Prédictions actives: {active_predictions}
+• Total prédictions historiques: {total_predictions}
+• Canal stats configuré: {'✅' if detected_stat_channel else '❌'} ({detected_stat_channel or 'Aucun'})
+• Canal affichage configuré: {'✅' if detected_display_channel else '❌'} ({detected_display_channel or 'Aucun'})
+
+🔧 **Configuration actuelle**:
+• Stats: {detected_stat_channel if detected_stat_channel else 'Non configuré'}
+• Display: {detected_display_channel if detected_display_channel else 'Non configuré'}
+• Intervalle: {prediction_interval} minute(s)"""
+
+        await event.respond(msg)
+        logger.info("Statut des déclencheurs envoyé à l'admin")
+
+    except Exception as e:
+        logger.error(f"Erreur show_trigger_numbers: {e}")
+        await event.respond(f"❌ Erreur: {e}")
+
+@client.on(events.NewMessage(pattern='/reset'))
+async def reset_data(event):
+    """Réinitialisation des données (admin uniquement)"""
+    if event.sender_id != ADMIN_ID:
+        return
+        
+    try:
+        # Réinitialiser les prédictions en attente
+        predictor.prediction_status = {}
+        predictor.last_predictions = []
+        predictor.status_log = []
+        
+        # Réinitialiser les données YAML
+        yaml_manager.save_predictions({})
+        
+        msg = """🔄 **Données réinitialisées avec succès !**
+
+✅ Prédictions en attente: vidées
+✅ Base de données YAML: réinitialisée
+✅ Configuration: préservée
+
+Le bot est prêt pour un nouveau cycle."""
+
+        await event.respond(msg)
+        logger.info("Données de prédiction réinitialisées")
+        logger.info("Données réinitialisées par l'admin")
+
+    except Exception as e:
+        logger.error(f"Erreur reset_data: {e}")
+        await event.respond(f"❌ Erreur lors de la réinitialisation: {e}")
 
 @client.on(events.NewMessage(pattern=r'/intervalle (\d+)'))
 async def set_prediction_interval(event):
@@ -633,12 +722,55 @@ async def handle_messages(event):
         message_text = event.message.message if event.message else ""
         channel_id = event.chat_id
         
+        # LOGS DÉTAILLÉS POUR TOUS LES MESSAGES
+        logger.info(f"📬 TOUS MESSAGES: Canal {channel_id} | Texte: {message_text[:100]}")
+        logger.info(f"🔧 Canal stats configuré: {detected_stat_channel}")
+        
         # Vérifier si c'est le bon canal
         if detected_stat_channel and channel_id == detected_stat_channel:
-            logger.info(f"✅ Message du canal stats: {message_text[:100]}")
+            logger.info(f"✅ Message accepté du canal stats {detected_stat_channel}: {message_text[:100]}")
+            
+            # Extraire le numéro de jeu pour logs
+            game_num = predictor.extract_game_number(message_text)
+            logger.info(f"Numéro de jeu extrait: {game_num}")
             
             # Logique de prédiction avec analyse des As
             should_predict, game_number, suit = predictor.should_predict(message_text)
+            
+            # LOGS DÉTAILLÉS DE L'ANALYSE DES AS
+            if game_number:
+                # Analyser les groupes pour logging
+                patterns = [
+                    r'(\d+)\(([^)]+)\)\s*-\s*[✅🔰]*\s*(\d+)\(([^)]+)\)',
+                    r'\(([^)]+)\)\s*-\s*[✅🔰]*\s*\(([^)]+)\)'
+                ]
+                
+                for pattern in patterns:
+                    match = re.search(pattern, message_text)
+                    if match:
+                        groups = match.groups()
+                        if len(groups) == 4:
+                            first_group = groups[1]
+                            second_group = groups[3]
+                        elif len(groups) == 2:
+                            first_group = groups[0]
+                            second_group = groups[1]
+                        else:
+                            continue
+                            
+                        # Analyser les As
+                        has_ace_first = predictor.has_ace_in_group(first_group)
+                        has_ace_second = predictor.has_ace_in_group(second_group)
+                        logger.info(f"🎯 Analyse As: Premier groupe='{first_group}' (As: {has_ace_first}), Deuxième groupe='{second_group}' (As: {has_ace_second})")
+                        
+                        if has_ace_first and not has_ace_second:
+                            logger.info("✅ Condition As validée: As dans premier groupe uniquement")
+                        elif not has_ace_first:
+                            logger.info("❌ Pas d'As dans le premier groupe, pas de prédiction")
+                        elif has_ace_second:
+                            logger.info("❌ As détecté dans le deuxième groupe, pas de prédiction")
+                        break
+            
             if should_predict and game_number and suit:
                 prediction_text = f"🔵{game_number} 🔵3D: statut :⏳"
                 logger.info(f"🎯 Prédiction générée: {prediction_text}")
@@ -672,22 +804,32 @@ async def handle_messages(event):
                 else:
                     logger.warning("⚠️ Canal display non configuré, prédiction non diffusée")
             
-            # Vérification des résultats
+            # VÉRIFICATION DÉTAILLÉE DES RÉSULTATS
             verified, number = predictor.verify_prediction(message_text)
             if verified is not None and number is not None:
                 status = predictor.prediction_status.get(number, '❌')
                 logger.info(f"🔍 Vérification jeu #{number}: {status}")
                 
+                if verified:
+                    logger.info(f"✅ PRÉDICTION RÉUSSIE: #{number} validée avec statut {status}")
+                else:
+                    logger.info(f"❌ PRÉDICTION ÉCHOUÉE: #{number} marquée comme échec")
+                
                 # Mettre à jour le message de prédiction si possible
                 if detected_display_channel and verified:
                     try:
                         # Chercher le message de prédiction correspondant pour le mettre à jour
-                        logger.info(f"Message de prédiction #{number} mis à jour avec statut: {status}")
+                        logger.info(f"📝 Message de prédiction #{number} mis à jour avec statut: {status}")
                     except Exception as e:
-                        logger.error(f"Erreur mise à jour message: {e}")
+                        logger.error(f"❌ Erreur mise à jour message: {e}")
+                        
+            # Log des prédictions en attente
+            pending_predictions = [k for k, v in predictor.prediction_status.items() if v == '⌛']
+            if pending_predictions:
+                logger.info(f"📊 Prédictions actives: {pending_predictions}")
                 
         else:
-            logger.debug(f"Message ignoré - Canal {channel_id} ≠ Stats {detected_stat_channel}")
+            logger.info(f"❌ Message ignoré: Canal {channel_id} ≠ Canal stats {detected_stat_channel}")
             
     except Exception as e:
         logger.error(f"Erreur handle_messages: {e}")
