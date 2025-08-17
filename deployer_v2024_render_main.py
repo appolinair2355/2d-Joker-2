@@ -33,9 +33,9 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', '0'))
 PORT = int(os.getenv('PORT', '10000'))
 prediction_interval = int(os.getenv('PREDICTION_INTERVAL', '1'))
 
-# Variables d'état globales
-detected_stat_channel = None
-detected_display_channel = None
+# Variables d'état globales - Configuration automatique
+detected_stat_channel = -1002646551216  # Canal stats pré-configuré
+detected_display_channel = -1002716137113  # Canal display pré-configuré
 prediction_status = {}
 last_predictions = []
 status_log = []
@@ -308,22 +308,38 @@ predictor = SimplePredictor()
 CONFIG_FILE = "bot_config.json"
 
 def load_config():
-    """Charge la configuration depuis le fichier JSON"""
+    """Charge la configuration depuis le fichier JSON avec valeurs par défaut"""
     global detected_stat_channel, detected_display_channel, prediction_interval
+    
+    # Configuration par défaut
+    default_stat_channel = -1002646551216
+    default_display_channel = -1002716137113
     
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, 'r') as f:
                 config = json.load(f)
-                detected_stat_channel = config.get('stat_channel')
-                detected_display_channel = config.get('display_channel')
+                detected_stat_channel = config.get('stat_channel', default_stat_channel)
+                detected_display_channel = config.get('display_channel', default_display_channel)
                 prediction_interval = config.get('prediction_interval', 1)
-                logger.info(f"✅ Configuration chargée: Stats={detected_stat_channel}, Display={detected_display_channel}, Intervalle={prediction_interval}min")
-                return True
+        else:
+            # Si pas de fichier config, utiliser les valeurs par défaut
+            detected_stat_channel = default_stat_channel
+            detected_display_channel = default_display_channel
+            prediction_interval = 1
+            # Sauvegarder la config par défaut
+            save_config()
+            
+        logger.info(f"✅ Configuration: Stats={detected_stat_channel}, Display={detected_display_channel}, Intervalle={prediction_interval}min")
+        return True
     except Exception as e:
         logger.error(f"Erreur chargement config: {e}")
+        # En cas d'erreur, utiliser les valeurs par défaut
+        detected_stat_channel = default_stat_channel
+        detected_display_channel = default_display_channel
+        prediction_interval = 1
     
-    return False
+    return True
 
 def save_config():
     """Sauvegarde la configuration dans le fichier JSON"""
@@ -368,26 +384,48 @@ async def bot_status_endpoint(request):
 @client.on(events.NewMessage(pattern='/start'))
 async def start_command(event):
     """Commande de démarrage"""
-    welcome_msg = f"""🎯 **Bot de Prédiction v2024 - Bienvenue !**
+    
+    # Vérifier l'accès aux canaux configurés
+    stat_status = "✅ Configuré"
+    display_status = "✅ Configuré"
+    
+    try:
+        await client.get_entity(detected_stat_channel)
+    except:
+        stat_status = "⚠️ Accès limité"
+        
+    try:
+        await client.get_entity(detected_display_channel)
+    except:
+        display_status = "⚠️ Accès limité"
+    
+    welcome_msg = f"""🎯 **Bot de Prédiction v2024 - ACTIF !**
 
-🔹 **Architecture YAML Pure** - Plus de PostgreSQL
+🔹 **Configuration Automatique** - Prêt à fonctionner
 🔹 **Logique As Optimisée** - 1 As premier + 0 As deuxième groupe
-🔹 **Port {PORT}** - Configuré pour Render.com
+🔹 **Port {PORT}** - Render.com
 
-**Fonctionnalités** :
-• Prédictions automatiques avec logique des As
-• Vérification des résultats avec statuts détaillés
-• Configuration flexible de l'intervalle de prédiction
-• Architecture YAML complète et autonome
+**État des Canaux** :
+📊 Canal Stats ({detected_stat_channel}): {stat_status}
+📢 Canal Display ({detected_display_channel}): {display_status}
 
-**Commandes Administrateur** :
-• `/status` - État complet du système
-• `/intervalle [1-60]` - Configurer délai prédiction
+**Fonctionnement** :
+✅ **Surveillance automatique** du canal stats
+✅ **Prédictions automatiques** selon logique des As  
+✅ **Diffusion automatique** des prédictions
+✅ **Vérification automatique** des résultats
 
-Le bot est prêt ! 🚀"""
+**Commandes Disponibles** :
+• `/status` - État détaillé du système
+• `/config` - Voir configuration actuelle
+• `/set_stat [ID]` - Changer canal stats
+• `/set_display [ID]` - Changer canal display
+
+🚀 **Le bot fonctionne automatiquement !**
+Aucune commande requise - surveille et prédit en temps réel."""
     
     await event.respond(welcome_msg)
-    logger.info(f"Message bienvenue envoyé à {event.sender_id}")
+    logger.info(f"Message bienvenue envoyé à {event.sender_id} avec état canaux")
 
 @client.on(events.NewMessage(pattern='/status'))
 async def status_command(event):
@@ -460,6 +498,132 @@ Configuration sauvegardée automatiquement.""")
         logger.error(f"Erreur set_prediction_interval: {e}")
         await event.respond(f"❌ Erreur: {e}")
 
+@client.on(events.NewMessage(pattern=r'/set_stat (-?\d+)'))
+async def set_stat_channel(event):
+    """Configure le canal de statistiques"""
+    if event.sender_id != ADMIN_ID:
+        return
+        
+    try:
+        global detected_stat_channel
+        channel_id = int(event.pattern_match.group(1))
+        
+        # Vérifier l'accès au canal
+        try:
+            channel = await client.get_entity(channel_id)
+            channel_title = getattr(channel, 'title', f'Canal {channel_id}')
+        except Exception as e:
+            await event.respond(f"❌ **Erreur**: Impossible d'accéder au canal {channel_id}\n{str(e)}")
+            return
+        
+        detected_stat_channel = channel_id
+        save_config()
+        
+        await event.respond(f"""✅ **Canal Statistiques Configuré**
+
+🔗 **Canal**: {channel_title}
+🆔 **ID**: {channel_id}
+
+Le bot surveillera maintenant ce canal pour les messages de jeu.""")
+        
+        logger.info(f"✅ Canal stats configuré: {channel_id} ({channel_title})")
+        
+    except ValueError:
+        await event.respond("❌ **Erreur**: ID de canal invalide")
+    except Exception as e:
+        logger.error(f"Erreur set_stat_channel: {e}")
+        await event.respond(f"❌ Erreur: {e}")
+
+@client.on(events.NewMessage(pattern=r'/set_display (-?\d+)'))
+async def set_display_channel(event):
+    """Configure le canal d'affichage des prédictions"""
+    if event.sender_id != ADMIN_ID:
+        return
+        
+    try:
+        global detected_display_channel
+        channel_id = int(event.pattern_match.group(1))
+        
+        # Vérifier l'accès au canal et les permissions
+        try:
+            channel = await client.get_entity(channel_id)
+            channel_title = getattr(channel, 'title', f'Canal {channel_id}')
+            
+            # Tester l'envoi d'un message de test
+            test_message = await client.send_message(channel_id, "🔧 Test de configuration - Canal d'affichage configuré avec succès !")
+            
+        except Exception as e:
+            await event.respond(f"❌ **Erreur**: Impossible d'envoyer dans le canal {channel_id}\n{str(e)}")
+            return
+        
+        detected_display_channel = channel_id
+        save_config()
+        
+        await event.respond(f"""✅ **Canal Affichage Configuré**
+
+🔗 **Canal**: {channel_title}
+🆔 **ID**: {channel_id}
+
+Les prédictions seront maintenant diffusées sur ce canal.""")
+        
+        logger.info(f"✅ Canal affichage configuré: {channel_id} ({channel_title})")
+        
+    except ValueError:
+        await event.respond("❌ **Erreur**: ID de canal invalide")
+    except Exception as e:
+        logger.error(f"Erreur set_display_channel: {e}")
+        await event.respond(f"❌ Erreur: {e}")
+
+@client.on(events.NewMessage(pattern='/config'))
+async def show_config(event):
+    """Affiche la configuration actuelle"""
+    if event.sender_id != ADMIN_ID:
+        return
+    
+    try:
+        # Obtenir les noms des canaux
+        stat_name = "Non configuré"
+        display_name = "Non configuré"
+        
+        if detected_stat_channel:
+            try:
+                stat_channel = await client.get_entity(detected_stat_channel)
+                stat_name = getattr(stat_channel, 'title', f'Canal {detected_stat_channel}')
+            except:
+                stat_name = f"Canal {detected_stat_channel} (inaccessible)"
+        
+        if detected_display_channel:
+            try:
+                display_channel = await client.get_entity(detected_display_channel)
+                display_name = getattr(display_channel, 'title', f'Canal {detected_display_channel}')
+            except:
+                display_name = f"Canal {detected_display_channel} (inaccessible)"
+        
+        config_msg = f"""🔧 **Configuration Actuelle**
+
+📊 **Canal Statistiques**:
+• Nom: {stat_name}
+• ID: {detected_stat_channel or 'Non configuré'}
+
+📢 **Canal Affichage**:
+• Nom: {display_name}  
+• ID: {detected_display_channel or 'Non configuré'}
+
+⚙️ **Paramètres**:
+• Intervalle prédiction: {prediction_interval} minute(s)
+• Port: {PORT}
+
+**Commandes de Configuration**:
+• `/set_stat [ID]` - Configurer canal stats
+• `/set_display [ID]` - Configurer canal affichage
+• `/intervalle [1-60]` - Configurer intervalle"""
+        
+        await event.respond(config_msg)
+        
+    except Exception as e:
+        logger.error(f"Erreur show_config: {e}")
+        await event.respond(f"❌ Erreur: {e}")
+
 # Messages handler principal avec logique As
 @client.on(events.NewMessage())
 @client.on(events.MessageEdited())
@@ -485,13 +649,28 @@ async def handle_messages(event):
                 yaml_manager.save_predictions(predictor.prediction_status)
                 logger.info(f"✅ Prédiction créée: Jeu #{game_number} -> {suit}")
                 
-                # Diffuser la prédiction si canal configuré
+                # Diffuser la prédiction automatiquement
                 if detected_display_channel:
                     try:
-                        await client.send_message(detected_display_channel, prediction_text)
-                        logger.info(f"📤 Prédiction diffusée sur canal {detected_display_channel}")
+                        # Essayer d'obtenir l'entité du canal d'abord
+                        try:
+                            display_entity = await client.get_entity(detected_display_channel)
+                        except:
+                            # Si impossible d'obtenir l'entité, utiliser directement l'ID
+                            display_entity = detected_display_channel
+                            
+                        await client.send_message(display_entity, prediction_text)
+                        logger.info(f"📤 Prédiction diffusée automatiquement sur canal {detected_display_channel}")
                     except Exception as e:
-                        logger.error(f"Erreur diffusion: {e}")
+                        logger.error(f"❌ Erreur diffusion sur {detected_display_channel}: {e}")
+                        # Essayer avec l'ID direct en cas d'erreur d'entité
+                        try:
+                            await client.send_message(detected_display_channel, prediction_text)
+                            logger.info(f"📤 Prédiction diffusée (ID direct) sur canal {detected_display_channel}")
+                        except Exception as e2:
+                            logger.error(f"❌ Échec total diffusion: {e2}")
+                else:
+                    logger.warning("⚠️ Canal display non configuré, prédiction non diffusée")
             
             # Vérification des résultats
             verified, number = predictor.verify_prediction(message_text)
@@ -539,8 +718,9 @@ async def main():
             
         logger.info(f"✅ Configuration: API_ID={API_ID}, ADMIN_ID={ADMIN_ID}, PORT={PORT}")
         
-        # Charger configuration
+        # Charger configuration avec valeurs par défaut
         load_config()
+        logger.info(f"🎯 Canaux pré-configurés: Stats={detected_stat_channel}, Display={detected_display_channel}")
         
         # Démarrer serveur web
         await start_web_server()
